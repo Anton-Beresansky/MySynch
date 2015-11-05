@@ -184,7 +184,7 @@ do
 			continue
 	fi
 	
-	timeout $TIMEOUT scp -r $SSHSESSION:$TMPFILE $TARGETDIR &>> /dev/null
+	timeout $TIMEOUT scp -r ${USERNAME}@${SERVER}:$TMPFILE $TARGETDIR &>> /dev/null
 	if [ $? -eq 0 ]
 		then
 			log "File $«$TMPFILE» has been successfully copied from «$SERVER» to «$TARGETDIR»;"
