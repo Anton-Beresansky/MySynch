@@ -12,6 +12,7 @@ TARGETDIR='/tmp'	#Set directory to collect data
 TMPDIR='/tmp' #Set temp path.
 MINSPACE=10240	#Set limit of free space in Kbytes. If TMPDIR (local) have less - script will stop.
 TIMEOUT=300	#Set timeout in seconds. If execution of COPYing time exseeds - script will stop.
+EXIT_CODE=0
 
 #====================================================================================
 #	Function Logging
@@ -121,38 +122,42 @@ do
 	log "Starting SSH session to «$SERVER» with username «$USERNAME»;"
 	SSHSESSION="ssh ${USERNAME}@${SERVER}"
 	$SSHSESSION "echo HI, HUNNY! I\'M HOME!" &>> /dev/null
-	if [ $? -ne 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]
 		then
-			log "ERROR: connection to host «$SERVER» with username «$USERNAME» (exitcode = $?)."
+			log "ERROR: connection to host «$SERVER» with username «$USERNAME» (exitcode = $EXIT_CODE)."
 			continue
 	else
 			log "Connected to «$SERVER» with username «$USERNAME»;"
 	fi
 	
 	$SSHSESSION "[ -d $SOURCEDIR ]" &>> /dev/null
-	if [ $? -ne 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]
 		then
-			log "ERROR: source directory «$SOURCEDIR» does not exist on server «$SERVER» or is not a directory (exitcode = $?)."
+			log "ERROR: source directory «$SOURCEDIR» does not exist on server «$SERVER» or is not a directory (exitcode = $EXIT_CODE)."
 			continue
 	fi
 	
 	$SSHSESSION "[ -r $SOURCEDIR ]" &>> /dev/null
-	if [ $? -ne 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]
 		then
-			log "ERROR: user «$USERNAME» does not have permissions to read source directory «$SOURCEDIR» on server «$SERVER» (exitcode = $?)."
+			log "ERROR: user «$USERNAME» does not have permissions to read source directory «$SOURCEDIR» on server «$SERVER» (exitcode = $EXIT_CODE)."
 			continue
 	fi
 	
 	$SSHSESSION "[ -x $SOURCEDIR ]" &>> /dev/null
-	if [ $? -ne 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]
 		then
-			log "ERROR: user «$USERNAME» does not have permissions to execute (or search) directory «$SOURCEDIR» on server «$SERVER» (exitcode = $?)."
+			log "ERROR: user «$USERNAME» does not have permissions to execute (or search) directory «$SOURCEDIR» on server «$SERVER» (exitcode = $EXIT_CODE)."
 			continue
 	fi
 	
-	SERVER_TMP_FREESPACE=$($SSHSESSION "df --output=avail $TMPDIR | awk 'NR==2 {print $1}'")
+	SERVER_TMP_FREESPACE=$($SSHSESSION "df --output=avail $TMPDIR" | awk 'NR==2 {print $1}')
 	log "«$SERVER_TMP_FREESPACE» Kbytes free space available in «$TMPDIR» on «$SERVER»;"
-	SERVER_SOURCE_SPACE=$($SSHSESSION "df --output=used $SOURCEDIR | awk 'NR==2 {print $1}'")
+	SERVER_SOURCE_SPACE=$($SSHSESSION "df --output=used $SOURCEDIR" | awk 'NR==2 {print $1}')
 	log "«$SERVER_SOURCE_SPACE» Kbytes used by source directory «$SOURCEDIR» on «$SERVER»;"
 	LOCAL_TMP_FREESPACE=$(df --output=avail $TMPDIR | awk 'NR==2 {print $1}')
 	log "«$LOCAL_TMP_FREESPACE» Kbytes used by source directory «$TMPDIR» on «$HOSTNAME»;"
@@ -169,27 +174,45 @@ do
 	TMPDATE=$(date +%d%m%Y-%H%M%S)
 	TMPFILE="$TMPDIR/MySynch_$SERVER"_"$TMPDATE.tar.gz"
 	TARGETFILE="$TARGETDIR/MySynch_$SERVER"_"$TMPDATE.tar.gz"
+
+	log "Trying to create archive «$TARGETFILE» on «$SERVER»;"
 	$SSHSESSION "tar -zcvf $TMPFILE $SOURCEDIR &>> /dev/null"
-	if [ $? -ne 0 ]
+	EXIT_CODE=$?	
+	if [ $EXIT_CODE -eq 0 ]
 		then
-			log "ERROR: failed to create archive «$TMPFILE» in «$TMPDIR» on «$SERVER» (exitcode = $?);"
-			continue
+			log "File «$TMPFILE» on «$SERVER» created successfully;"
+	else
+		case $EXIT_CODE in
+			1)
+				log "WARNING: some files were changed while being archived and so the resulting archive does not contain the exact copy of the file set;"
+				;;
+			2)
+				log "ERROR: some fatal, unrecoverable error occurred (exitcode = $EXIT_CODE);"
+				continue
+				;;
+			*)
+				log "ERROR: failed to create archive «$TMPFILE» in «$TMPDIR» on «$SERVER» (exitcode = $EXIT_CODE);"
+				continue
+				;;
+		esac
 	fi
 	SERVER_MD5=$($SSHSESSION "md5sum $TMPFILE | awk '{print \$1}'")
-	if [ $? -eq 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -eq 0 ]
 		then
 			log "md5sum of «$TMPFILE» on «$SERVER» = «$SERVER_MD5»;"
 		else
-			log "ERROR: failed to get md5sum of «$TMPFILE» on «$SERVER» (exitcode = $?);"
+			log "ERROR: failed to get md5sum of «$TMPFILE» on «$SERVER» (exitcode = $EXIT_CODE);"
 			continue
 	fi
 	
 	timeout $TIMEOUT scp -r ${USERNAME}@${SERVER}:$TMPFILE $TARGETDIR &>> /dev/null
-	if [ $? -eq 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -eq 0 ]
 		then
-			log "File $«$TMPFILE» has been successfully copied from «$SERVER» to «$TARGETDIR»;"
+			log "File «$TMPFILE» has been successfully copied from «$SERVER» to «$TARGETDIR»;"
 	else
-		case $? in
+		case $EXIT_CODE in
 			124)
 				log "ERROR: time to copy «$TMPFILE» from «$SERVER» to «$TARGETDIR» exceeded timout limit «$TIMEOUT» seconds. File was NOT copied;"
 				;;
@@ -204,16 +227,17 @@ do
 				;;
 			137)
 				log "ERROR: command is sent the KILL(9) signal (128+9). (scriptline = «$LINENO»);"
-			
+				;;
 		esac
-			log "ERROR: unknown ERROR occured while trying to copy file «$TMPFILE» from «$SERVER» to «$TARGETDIR». (exitcode = $?);"
+			log "ERROR: unknown ERROR occured while trying to copy file «$TMPFILE» from «$SERVER» to «$TARGETDIR». (exitcode = $EXIT_CODE);"
 	fi
 	
 	$SSHSESSION "rm -f $TMPFILE &>> /dev/null"
-	if [ $? -eq 0 ]
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -eq 0 ]
 		then
 			log "File «$TMPFILE» successfully deleted from «$SERVER»;"
 	else
-		log "ERROR: failed to delete file «$TMPFILE» from «$SERVER». (exitcode = $?);"
+		log "ERROR: failed to delete file «$TMPFILE» from «$SERVER». (exitcode = $EXIT_CODE);"
 	fi
 done
